@@ -5,8 +5,6 @@ import torch.nn.functional as F
 import torch
 from transformers import AutoImageProcessor, AutoModel, Owlv2Processor, Owlv2ForObjectDetection
 from dreamsim.dreamsim import dreamsim
-from transformers import SegformerFeatureExtractor, SegformerModel
-
 
 def load_query_image(query_dict):
     query_path = query_dict['query_path']
@@ -302,96 +300,6 @@ class eval_with_dinov2:
         scores = []
         scores_ = []
         results, owl_out, dino_out = self.owl_dinov2_distance(image, query_dict, threshold)
-        for result in results:
-            distance = result['distance']
-            distance_score = [[1 - x for x in y] for y in distance]
-            distance_score_ = [[round(1 - x, 2) for x in y] for y in distance]
-            scores.append(distance_score)
-            scores_.append(distance_score_)
-        return scores_ if return_round else scores
-
-class eval_with_segformer:
-    def __init__(self, cache_dir=None, device='cuda'):
-        self.owl_processor = Owlv2Processor.from_pretrained("google/owlv2-base-patch16-ensemble")
-        owl_model = Owlv2ForObjectDetection.from_pretrained("google/owlv2-base-patch16-ensemble")
-        self.owl_model = owl_model.to(device)
-
-        segformer_processor = SegformerFeatureExtractor.from_pretrained("nvidia/segformer-b3-finetuned-ade-512-512")
-        segformer_model = SegformerModel.from_pretrained(
-            "nvidia/segformer-b3-finetuned-ade-512-512",
-            output_hidden_states=True
-        )
-        self.segformer_processor = segformer_processor
-        self.segformer_model = segformer_model.to(device)
-        self.device = device
-
-    def cache_query_embedding(self, query_dict):
-        query_img = query_dict['query_img']  # already sorted
-        query_emb = []
-        for imgs in query_img:
-            embs = []
-            for img in imgs:
-                inputs = self.segformer_processor(images=img, return_tensors='pt').to(self.device)
-                outputs = self.segformer_model(**inputs)
-
-                # Use encoder hidden states mean as embedding
-                hidden_states = outputs.hidden_states[-1]  # (batch_size, hidden_dim, h, w)
-                emb = hidden_states.mean(dim=[2, 3])  # (batch_size, hidden_dim)
-
-                embs.append(emb.to('cpu'))
-            query_emb.append(torch.cat(embs, dim=0))  # 5, hidden_dim
-        query_dict['query_emb'] = query_emb
-        return query_dict
-
-    def query_dict_update(self, query_dict):
-        query_dict = load_query_image(query_dict)
-        return self.cache_query_embedding(query_dict)
-
-    def compute_distance(self, candidate, query_dict):
-        results = {}
-        inputs = self.segformer_processor(images=candidate, return_tensors='pt').to(self.device)
-        outputs = self.segformer_model(**inputs)
-
-        hidden_states = outputs.hidden_states[-1]  # (batch_size, hidden_dim, h, w)
-        candidate_emb = hidden_states.mean(dim=[2, 3])  # (batch_size, hidden_dim)
-
-        for i, query_emb in enumerate(query_dict['query_emb']):
-            # query_emb: 5, hidden_dim
-            distance = 1 - F.cosine_similarity(candidate_emb, query_emb.to(self.device), dim=-1)  # 5
-            distance = distance.tolist()
-            results[i] = distance
-        return results  # dict[query_name] = list of 5 distances
-
-    def owl_segformer_distance(self, img, query_dict, threshold=0.25):
-        if img.mode != 'RGB':
-            img = img.convert('RGB')
-        categories = query_dict['query_name']
-        owl_out = detect_and_crop(img, query_dict, self.owl_model, self.owl_processor, threshold)
-        bboxes = owl_out['bbox']
-        results = []
-        segformer_out = {}
-        for bbox in bboxes:
-            result = {}
-            x1, y1, x2, y2 = bbox
-            candidate = crop_and_pad_image(img, (x1, y1, x2, y2))
-            result['image'] = candidate
-            result['bbox'] = bbox
-            segformer_out = self.compute_distance(candidate, query_dict)
-            distances = []
-            for i, category in enumerate(categories):
-                distance = segformer_out[i]
-                distances.append(distance)
-            result['distance'] = distances
-            results.append(result)
-        return results, owl_out, segformer_out
-
-    @torch.no_grad()
-    def score(self, image, query_dict, threshold=0.25, return_round=False):
-        if 'query_emb' not in query_dict:
-            query_dict = self.query_dict_update(query_dict)
-        scores = []
-        scores_ = []
-        results, owl_out, segformer_out = self.owl_segformer_distance(image, query_dict, threshold)
         for result in results:
             distance = result['distance']
             distance_score = [[1 - x for x in y] for y in distance]
