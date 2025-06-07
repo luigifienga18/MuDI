@@ -5,7 +5,7 @@ import torch.nn.functional as F
 import torch
 from transformers import AutoImageProcessor, AutoModel, Owlv2Processor, Owlv2ForObjectDetection
 from dreamsim.dreamsim import dreamsim
-from transformers import SegformerFeatureExtractor, SegformerForSemanticSegmentation
+from transformers import SegformerFeatureExtractor, SegformerModel
 
 
 def load_query_image(query_dict):
@@ -317,7 +317,7 @@ class eval_with_segformer:
         self.owl_model = owl_model.to(device)
 
         segformer_processor = SegformerFeatureExtractor.from_pretrained("nvidia/segformer-b3-finetuned-ade-512-512")
-        segformer_model = SegformerForSemanticSegmentation.from_pretrained(
+        segformer_model = SegformerModel.from_pretrained(
             "nvidia/segformer-b3-finetuned-ade-512-512",
             output_hidden_states=True
         )
@@ -335,7 +335,7 @@ class eval_with_segformer:
                 outputs = self.segformer_model(**inputs)
 
                 # Use encoder hidden states mean as embedding
-                hidden_states = outputs.encoder_hidden_states[-1]  # (batch_size, hidden_dim, h, w)
+                hidden_states = outputs.hidden_states[-1]  # (batch_size, hidden_dim, h, w)
                 emb = hidden_states.mean(dim=[2, 3])  # (batch_size, hidden_dim)
 
                 embs.append(emb.to('cpu'))
@@ -352,7 +352,7 @@ class eval_with_segformer:
         inputs = self.segformer_processor(images=candidate, return_tensors='pt').to(self.device)
         outputs = self.segformer_model(**inputs)
 
-        hidden_states = outputs.encoder_hidden_states[-1]  # (batch_size, hidden_dim, h, w)
+        hidden_states = outputs.hidden_states[-1]  # (batch_size, hidden_dim, h, w)
         candidate_emb = hidden_states.mean(dim=[2, 3])  # (batch_size, hidden_dim)
 
         for i, query_emb in enumerate(query_dict['query_emb']):
